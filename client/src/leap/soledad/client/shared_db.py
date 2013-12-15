@@ -143,9 +143,15 @@ class SoledadSharedDatabase(http_database.HTTPDatabase, TokenBasedAuth):
                                             creds)
         self._uuid = uuid
 
-    def lock(self):
+    def lock(self, token=None):
         """
         Obtain a lock on document with id C{doc_id}.
+
+        This method may be used to re-obtain a lock with a previously obtained
+        C{token}.
+
+        :param token: The token returned by a previous call to lock().
+        :type token: str
 
         :return: A tuple containing the token to unlock and the timeout until
                  lock expiration.
@@ -154,7 +160,7 @@ class SoledadSharedDatabase(http_database.HTTPDatabase, TokenBasedAuth):
         :raise HTTPError: Raised if any HTTP error occurs.
         """
         res, headers = self._request_json('PUT', ['lock', self._uuid],
-                                          body={})
+                                          body={}, params={'token': token})
         return res['token'], res['timeout']
 
     def unlock(self, token):

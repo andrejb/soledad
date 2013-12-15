@@ -1,0 +1,2 @@
+  o Use a token to regain lock on the shared db in case bootstrap is
+    interrupted. Closes #4522.

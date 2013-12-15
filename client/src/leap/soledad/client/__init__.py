@@ -270,9 +270,6 @@ class Soledad(object):
         :type cert_file: str
         :param auth_token: Authorization token for accessing remote databases.
         :type auth_token: str
-
-        :raise BootstrapSequenceError: Raised when the secret generation and
-            storage on server sequence has failed for some reason.
         """
         # get config params
         self._uuid = uuid
@@ -289,7 +286,7 @@ class Soledad(object):
         global SOLEDAD_CERT
         SOLEDAD_CERT = cert_file
         # initiate bootstrap sequence
-        self._bootstrap()  # might raise BootstrapSequenceError()
+        self._bootstrap()
 
     def _init_config(self, secrets_path, local_db_path, server_url):
         """
@@ -319,7 +316,8 @@ class Soledad(object):
         """
         Retrieves or generates the crypto secrets.
 
-        Might raise BootstrapSequenceError
+        :raise BootstrapSequenceError: Raised when the secret generation and
+            storage on server sequence has failed for some reason.
         """
         doc = self._get_secrets_from_shared_db()
 
@@ -376,8 +374,6 @@ class Soledad(object):
         This method decides which bootstrap stages have already been performed
         and performs the missing ones in order.
 
-        :raise BootstrapSequenceError: Raised when the secret generation and
-            storage on server sequence has failed for some reason.
         """
         # STAGE 0  - local environment setup
         self._init_dirs()
@@ -396,37 +392,64 @@ class Soledad(object):
 
             # --- start of atomic operation in shared db ---
 
-            # obtain lock on shared db
+            # In order to avoid multiple clients generating and uploading
+            # distinct storage secrets, we do the following:
+            #
+            #   - obtain a lock on the shared database.
+            #   - create a new storage secret.
+            #   - upload the new storage secret to the shared database.
+            #   - release the lock.
+            #
+            # When we succesfully obtain a lock on the shared database, we
+            # receive a token that allows us to either release the lock, or
+            # re-obtain the lock if the bootstrap failed for some reason.
+            #
+            # The token is also used for putting the secret on the database.
+            #
+            # We will try forever until we either succesfully generate or
+            # obtain a storage secret from server.
+
             token = timeout = None
-            try:
-                token, timeout = self._shared_db.lock()
-            except AlreadyLockedError:
-                raise BootstrapSequenceError('Database is already locked.')
+            while True:  # if connection is bad, we might have to try to lock
+                         # many times.
 
-            try:
-                self._get_or_gen_crypto_secrets()
-            except Exception as e:
-                secrets_problem = e
+                # obtain lock on shared db
+                try:
+                    token, timeout = self._shared_db.lock(token)
+                except AlreadyLockedError as error:
+                    #timeout = error.read()  # XXX fix this
+                    logger.warning('Database was locked by another process '
+                                   'The lock expires in %d seconds.' % timeout)
+                    time.sleep(30)  # XXX we can use timeout here
+                    continue
 
-            # release the lock on shared db
-            try:
-                self._shared_db.unlock(token)
-            except NotLockedError:
-                # for some reason the lock expired. Despite that, secret
-                # loading or generation/storage must have been executed
-                # successfully, so we pass.
-                pass
-            except InvalidTokenError:
-                # here, our lock has not only expired but also some other
-                # client application has obtained a new lock and is currently
-                # doing its thing in the shared database. Using the same
-                # reasoning as above, we assume everything went smooth and
-                # pass.
-                pass
-            except Exception as e:
-                logger.error("Unhandled exception when unlocking shared "
-                             "database.")
-                logger.exception(e)
+                try:
+                    self._get_or_gen_crypto_secrets()
+                except BootstrapSequenceError:
+                    continue
+                except Exception as e:
+                    secrets_problem = e
+
+                # release the lock on shared db
+                try:
+                    self._shared_db.unlock(token)
+                    break
+                except NotLockedError:
+                    # for some reason the lock expired. Despite that, secret
+                    # loading or generation/storage must have been executed
+                    # successfully, so we pass.
+                    break
+                except InvalidTokenError:
+                    # here, our lock has not only expired but also some other
+                    # client application has obtained a new lock and is
+                    # currently doing its thing in the shared database. Using the
+                    # same # reasoning as above, we assume everything went smooth
+                    # and pass.
+                    break
+                except Exception as e:
+                    logger.error("Unhandled exception when unlocking shared "
+                                 "database.")
+                    logger.exception(e)
 
             # --- end of atomic operation in shared db ---
 

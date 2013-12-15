@@ -1,0 +1,2 @@
+  o Allow client to regain a lock on the shared database if it has the correct
+    token. Closes #4522.

@@ -204,8 +204,8 @@ class LockResource(object):
         self._state = state
         self._responder = responder
 
-    @http_app.http_method(content=str)
-    def put(self, content=None):
+    @http_app.http_method(content=str, token=str)
+    def put(self, content=None, token=None):
         """
         Handle a PUT request to the lock document.
 
@@ -222,6 +222,9 @@ class LockResource(object):
                         because PUT requests with empty content are considered
                         invalid requests by u1db.
         :type content: str
+        :param token: A token the client might have obtained in a previous
+                      call to this method.
+        :type token:
         """
         # obtain filesystem lock
         if not self._try_obtain_filesystem_lock():
@@ -230,26 +233,23 @@ class LockResource(object):
 
         created_lock = False
         now = time.time()
-        token = hashlib.sha256(os.urandom(10)).hexdigest()  # for releasing
+        new_token = hashlib.sha256(os.urandom(10)).hexdigest()  # for releasing
         lock_doc = self._shared_db.get_doc(self._lock_doc_id)
         remaining = self._remaining(lock_doc, now)
 
-        # if there's no lock, create one
+        lock_doc_content = {
+            self.TIMESTAMP_KEY: now,
+            self.LOCK_TOKEN_KEY: new_token,
+        }
+
         if lock_doc is None:
-            lock_doc = self._shared_db.create_doc(
-                {
-                    self.TIMESTAMP_KEY: now,
-                    self.LOCK_TOKEN_KEY: token,
-                },
-                doc_id=self._lock_doc_id)
+            # create a new lock if there's no one
+            lock_doc = self._shared_db.create_doc(lock_doc_content)
             created_lock = True
-        else:
-            if remaining == 0:
-                # lock expired, create new one
-                lock_doc.content = {
-                    self.TIMESTAMP_KEY: now,
-                    self.LOCK_TOKEN_KEY: token,
-                }
+        elif remaining == 0 or lock_doc.content[self.LOCK_TOKEN_KEY] == token:
+                # either the lock expired or user has the correct token, so
+                # create a new lock
+                lock_doc.content = lock_doc_content
                 self._shared_db.put_doc(lock_doc)
                 created_lock = True
 
@@ -258,7 +258,7 @@ class LockResource(object):
         # send response to client
         if created_lock is True:
             self._responder.send_response_json(
-                201, timeout=self.TIMEOUT, token=token)  # success: created
+                201, timeout=self.TIMEOUT, token=new_token)  # success: created
         else:
             wire_descr = AlreadyLockedError.wire_description
             self._responder.send_response_json(
