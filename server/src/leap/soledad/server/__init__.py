@@ -104,7 +104,7 @@ if version.base() == "12.0.0":
 
 from leap.soledad.server.auth import SoledadTokenAuthMiddleware
 from leap.soledad.server.gzip_middleware import GzipMiddleware
-from leap.soledad.server.lock_resource import LockResource
+from leap.soledad.server.lock import LockResource
 
 from leap.soledad.common import SHARED_DB_NAME
 from leap.soledad.common.couch import CouchServerState

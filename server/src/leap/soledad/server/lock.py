@@ -1,6 +1,6 @@
 # -*- coding: utf-8 -*-
-# lock_resource.py
-# Copyright (C) 2013 LEAP
+# lock.py
+# Copyright (C) 2013, 2014 LEAP
 #
 # This program is free software: you can redistribute it and/or modify
 # it under the terms of the GNU General Public License as published by
@@ -55,6 +55,7 @@ class LockResource(object):
 
     url_pattern = '/%s/lock/{uuid}' % SHARED_DB_NAME
     """
+    The URL pattern used to route to this resource.
     """
 
     TIMEOUT = 300  # XXX is 5 minutes reasonable?

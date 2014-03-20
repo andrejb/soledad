@@ -47,7 +47,8 @@ from leap.soledad.client import (
     Soledad,
     target,
 )
-from leap.soledad.server import SoledadApp, LockResource
+from leap.soledad.server import SoledadApp
+from leap.soledad.server.lock import LockResource
 from leap.soledad.server.auth import URLToAuthorization
 
 
