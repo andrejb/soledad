@@ -23,13 +23,17 @@ Authentication facilities for Soledad Server.
 
 import httplib
 import simplejson as json
+import urlparse
 
 
 from u1db import DBNAME_CONSTRAINTS, errors as u1db_errors
 from abc import ABCMeta, abstractmethod
 from routes.mapper import Mapper
-from couchdb.client import Server
+from paisley import CouchDB
+from twisted.internet import reactor
+from twisted.internet.threads import blockingCallFromThread
 from twisted.python import log
+from twisted.web import error as tw_error
 
 
 from leap.soledad.common import (
@@ -392,14 +396,34 @@ class SoledadTokenAuthMiddleware(SoledadAuthMiddleware):
         """
         token = auth_data  # we expect a cleartext token at this point
         try:
-            return self._verify_token_in_couch(uuid, token)
+            return self._verify_token(uuid, token)
         except InvalidAuthTokenError:
             raise
         except Exception as e:
             log.err(e)
             return False
 
-    def _verify_token_in_couch(self, uuid, token):
+    def _get_doc_from_couch(self, doc_id):
+        """
+        Fetch a document from the couch backend.
+
+        :param doc_id: The id of the document to be fetched.
+        :type doc_id: str
+
+        :return: A deferred which fethces the document.
+        :rtype: Deferred.
+        """
+        url = urlparse.urlparse(self._app.state.couch_url)
+        db = CouchDB(
+            url.hostname,
+            port=url.port,
+            dbName=self.TOKENS_DB,
+            username=url.username,
+            password=url.password,
+        )
+        return blockingCallFromThread(reactor, db.openDoc, doc_id)
+
+    def _verify_token(self, uuid, token):
         """
         Query couchdb to decide if C{token} is valid for C{uuid}.
 
@@ -412,13 +436,12 @@ class SoledadTokenAuthMiddleware(SoledadAuthMiddleware):
                                       either missing in the tokens db or is
                                       invalid.
         """
-        server = Server(url=self._app.state.couch_url)
-        dbname = self.TOKENS_DB
-        db = server[dbname]
-        token = db.get(token)
-        if token is None or \
-                token[self.TOKENS_TYPE_KEY] != self.TOKENS_TYPE_DEF or \
-                token[self.TOKENS_USER_ID_KEY] != uuid:
+        try:
+            token = self._get_doc_from_couch(token)
+            if token[self.TOKENS_TYPE_KEY] != self.TOKENS_TYPE_DEF or \
+                    token[self.TOKENS_USER_ID_KEY] != uuid:
+                raise InvalidAuthTokenError()
+        except tw_error.Error:
             raise InvalidAuthTokenError()
         return True
 
