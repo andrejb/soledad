@@ -1,6 +1,6 @@
 function(doc, req){
     if (!doc) {
-        doc = {}
+        doc = {};
         doc['_id'] = 'u1db_sync_log';
         doc['syncs'] = [];
     }
@@ -19,4 +19,3 @@ function(doc, req){
     ]);
     return [doc, 'ok'];
 }
-
