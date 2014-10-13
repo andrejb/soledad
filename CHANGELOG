@@ -1,3 +1,8 @@
+0.6.1 Oct 13, 2014:
+Client:
+  o Do not depend on pysqlite2 (#2945).
+  o Bump version of dep on soledad.common.
+
 0.6.0 Jul 18, 2014:
 Client:
   o Close all connections after syncing. Fixes #5518.
