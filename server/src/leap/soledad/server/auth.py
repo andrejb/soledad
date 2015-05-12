@@ -420,9 +420,12 @@ class SoledadTokenAuthMiddleware(SoledadAuthMiddleware):
         dbname = self.TOKENS_DB_PREFIX + \
             str(int(time.time() / self.TOKENS_DB_EXPIRE))
         db = server[dbname]
+        log.msg("Verifying token in couch: (uuid: %s, token: %s, tokendb: %s)"
+                % (uuid, token, dbname))
         # lookup key is a hash of the token to prevent timing attacks.
         token = db.get(sha512(token).hexdigest())
         if token is None:
+            log.msg("Invalid token! Token is 'None'.")
             raise InvalidAuthTokenError()
         # we compare uuid hashes to avoid possible timing attacks that
         # might exploit python's builtin comparison operator behaviour,
@@ -431,7 +434,10 @@ class SoledadTokenAuthMiddleware(SoledadAuthMiddleware):
         req_uuid_hash = sha512(uuid).digest()
         if token[self.TOKENS_TYPE_KEY] != self.TOKENS_TYPE_DEF \
                 or couch_uuid_hash != req_uuid_hash:
+            log.msg("Invalid token! Content of token is '%s'."
+                    % token[self.TOKENS_USER_ID_KEY])
             raise InvalidAuthTokenError()
+        log.msg("Token is valid for user %s!" % uuid)
         return True
 
     def _get_auth_error_string(self):
