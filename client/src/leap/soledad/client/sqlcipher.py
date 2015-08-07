@@ -633,6 +633,8 @@ class SQLCipherU1DBSync(SQLCipherDatabase):
         """
         # close all open syncers
         for url in self._syncers.keys():
+            _, syncer = self._syncers[url]
+            syncer.close()
             del self._syncers[url]
 
 
