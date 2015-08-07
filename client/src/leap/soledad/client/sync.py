@@ -202,3 +202,6 @@ class SoledadSynchronizer(Synchronizer):
             return self.sync_target.record_sync_info(
                 self.source._replica_uid, cur_gen, trans_id)
         return defer.succeed(None)
+
+    def close(self):
+        self.sync_target.close()
