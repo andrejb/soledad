@@ -44,6 +44,9 @@ from StringIO import StringIO
 from u1db.remote import http_client
 from u1db.remote.ssl_match_hostname import match_hostname
 from zope.interface import implements
+from collections import defaultdict
+
+from twisted.internet.defer import DeferredLock
 
 from leap.common.config import get_path_prefix
 from leap.common.plugins import collect_plugins
@@ -55,11 +58,11 @@ from leap.soledad.common import soledad_assert_type
 from leap.soledad.client import adbapi
 from leap.soledad.client import events as soledad_events
 from leap.soledad.client import interfaces as soledad_interfaces
+from leap.soledad.client import sqlcipher
+from leap.soledad.client import encdecpool
 from leap.soledad.client.crypto import SoledadCrypto
 from leap.soledad.client.secrets import SoledadSecrets
 from leap.soledad.client.shared_db import SoledadSharedDatabase
-from leap.soledad.client import sqlcipher
-from leap.soledad.client import encdecpool
 
 logger = logging.getLogger(name=__name__)
 
@@ -113,6 +116,13 @@ class Soledad(object):
     local_db_file_name = 'soledad.u1db'
     secrets_file_name = "soledad.json"
     default_prefix = os.path.join(get_path_prefix(), 'leap', 'soledad')
+
+    """
+    A dictionary that holds locks which avoid multiple sync attempts from the
+    same database replica. The dictionary indexes are the paths to each local
+    db, so we guarantee that only one sync happens for a local db at a time.
+    """
+    _sync_lock = defaultdict(DeferredLock)
 
     def __init__(self, uuid, passphrase, secrets_path, local_db_path,
                  server_url, cert_file, shared_db=None,
@@ -641,7 +651,49 @@ class Soledad(object):
     # ISyncableStorage
     #
 
+    @property
+    def sync_lock(self):
+        """
+        Return a lock to prevent concurrent synchronization processes from the
+        same local db.
+
+        :return: A deferred lock specific for the local database used by this
+                 Soledad instance.
+        :rtype: twisted.internet.defer.DeferredLock
+        """
+        return self._sync_lock[self._local_db_path]
+
+    @property
+    def syncing(self):
+        """
+        Return whether there's a sync process currently going on.
+
+        :return: Whether there's a sync process currently going on.
+        :rtype: bool
+        """
+        return self.sync_lock.locked
+
     def sync(self, defer_decryption=True):
+        """
+        Synchronize documents with the server replica.
+
+        This method uses a lock to prevent multiple sync processes to happen in
+        parallel.
+
+        :param defer_decryption:
+            Whether to defer decryption of documents, or do it inline while
+            syncing.
+        :type defer_decryption: bool
+
+        :return: A deferred lock that will run the actual sync process when
+                 the lock is acquired, and which will fire with with the local
+                 generation before the synchronization was performed.
+        :rtype: twisted.internet.defer.Deferred
+        """
+        return self.sync_lock.run(lambda: self._sync(
+            defer_decryption=defer_decryption))
+
+    def _sync(self, defer_decryption=True):
         """
         Synchronize documents with the server replica.
 
@@ -650,23 +702,11 @@ class Soledad(object):
             syncing.
         :type defer_decryption: bool
 
-        :return: A deferred whose callback will be invoked with the local
-            generation before the synchronization was performed.
+        :return: A deferred that will run the actual sync process and which
+                 will fire with with the local generation before the
+                 synchronization was performed.
         :rtype: twisted.internet.defer.Deferred
         """
-
-        # -----------------------------------------------------------------
-        # TODO this needs work.
-        # Should review/write tests to check that this:
-
-        # (1) Defer to the syncer pool -- DONE (on dbsyncer)
-        # (2) Return the deferred
-        # (3) Add the callback for signaling the event (executed on reactor
-        #     thread)
-        # (4) Check that the deferred is called with the local gen.
-
-        # -----------------------------------------------------------------
-
         sync_url = urlparse.urljoin(self._server_url, 'user-%s' % self.uuid)
         d = self._dbsyncer.sync(
             sync_url,
@@ -701,16 +741,6 @@ class Soledad(object):
 
         d.addCallbacks(_sync_callback, _sync_errback)
         return d
-
-    @property
-    def syncing(self):
-        """
-        Return wether Soledad is currently synchronizing with the server.
-
-        :return: Wether Soledad is currently synchronizing with the server.
-        :rtype: bool
-        """
-        return self._dbsyncer.syncing
 
     def _set_token(self, token):
         """

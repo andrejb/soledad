@@ -43,7 +43,6 @@ handled by Soledad should be created by SQLCipher >= 2.0.
 """
 import logging
 import os
-import threading
 import json
 import u1db
 
@@ -51,15 +50,11 @@ from u1db import errors as u1db_errors
 from u1db.backends import sqlite_backend
 
 from hashlib import sha256
-from contextlib import contextmanager
-from collections import defaultdict
 from functools import partial
 
 from pysqlcipher import dbapi2 as sqlcipher_dbapi2
 
 from twisted.internet import reactor
-from twisted.internet.threads import deferToThreadPool
-from twisted.python.threadpool import ThreadPool
 from twisted.enterprise import adbapi
 
 from leap.soledad.client.http_target import SoledadHTTPSyncTarget
@@ -423,12 +418,6 @@ class SQLCipherU1DBSync(SQLCipherDatabase):
     """
     ENCRYPT_LOOP_PERIOD = 1
 
-    """
-    A dictionary that hold locks which avoid multiple sync attempts from the
-    same database replica.
-    """
-    syncing_lock = defaultdict(threading.Lock)
-
     def __init__(self, opts, soledad_crypto, replica_uid, cert_file,
                  defer_encryption=False, sync_db=None, sync_enc_pool=None):
 
@@ -454,8 +443,6 @@ class SQLCipherU1DBSync(SQLCipherDatabase):
         self.received_docs = []
 
         self.running = False
-        self._sync_threadpool = None
-        self._initialize_sync_threadpool()
 
         self._reactor = reactor
         self._reactor.callWhenRunning(self._start)
@@ -471,51 +458,20 @@ class SQLCipherU1DBSync(SQLCipherDatabase):
 
     def _start(self):
         if not self.running:
-            self._sync_threadpool.start()
             self.shutdownID = self._reactor.addSystemEventTrigger(
                 'during', 'shutdown', self.finalClose)
             self.running = True
 
-    def _defer_to_sync_threadpool(self, meth, *args, **kwargs):
-        return deferToThreadPool(
-            self._reactor, self._sync_threadpool, meth, *args, **kwargs)
-
     def _initialize_main_db(self):
-
-        def _init_db():
-            self._db_handle = initialize_sqlcipher_db(
-                self._opts, check_same_thread=False)
-            self._real_replica_uid = None
-            self._ensure_schema()
-            self.set_document_factory(soledad_doc_factory)
-
-        return self._defer_to_sync_threadpool(_init_db)
-
-    def _initialize_sync_threadpool(self):
-        """
-        Initialize a ThreadPool with exactly one thread, that will be used to
-        run all the network blocking calls for syncing on a separate thread.
-
-        TODO this needs to be ported away from urllib and into twisted async
-        calls, and then we can ditch this syncing thread and reintegrate into
-        the main reactor.
-        """
-        # XXX if the number of threads in this thread pool is ever changed, we
-        #     should make sure that no operations on the database shuold occur
-        #     before the database has been initialized.
-        self._sync_threadpool = ThreadPool(0, 1)
+        self._db_handle = initialize_sqlcipher_db(
+            self._opts, check_same_thread=False)
+        self._real_replica_uid = None
+        self._ensure_schema()
+        self.set_document_factory(soledad_doc_factory)
 
     def sync(self, url, creds=None, defer_decryption=True):
         """
         Synchronize documents with remote replica exposed at url.
-
-        This method defers a sync to a 1-threaded threadpool. The main
-        database initialziation was deferred to that thread during this
-        object's initialization. As there's currently only one thread in that
-        threadpool, the db init was queued before this method was called, so
-        we don't need to actually wait for the db to be ready. If this ever
-        changes, we should add a thread-safe condition to ensure the db is
-        ready before using it.
 
         :param url: The url of the target replica to sync with.
         :type url: str
@@ -532,46 +488,17 @@ class SQLCipherU1DBSync(SQLCipherDatabase):
             before the synchronisation was performed.
         :rtype: Deferred
         """
-        # the following context manager blocks until the syncing lock can be
-        # acquired.
-        with self._syncer(url, creds=creds) as syncer:
+        syncer = self._get_syncer(url, creds=creds)
 
-            def _record_received_docs(result):
-                # beware, closure. syncer is in scope.
-                self.received_docs = syncer.received_docs
-                return result
+        def _record_received_docs(result):
+            # beware, closure. syncer is in scope.
+            self.received_docs = syncer.received_docs
+            return result
 
-            # XXX could mark the critical section here...
-            d = syncer.sync(defer_decryption=defer_decryption)
-            d.addCallback(_record_received_docs)
-            return d
-
-    @contextmanager
-    def _syncer(self, url, creds=None):
-        """
-        Accesor for synchronizer.
-
-        As we reuse the same synchronizer for every sync, there can be only
-        one instance synchronizing the same database replica at the same time.
-        Because of that, this method blocks until the syncing lock can be
-        acquired.
-
-        :param creds: optional dictionary giving credentials to authorize the
-                      operation with the server.
-        :type creds: dict
-        """
-        with self.syncing_lock[self._path]:
-            syncer = self._get_syncer(url, creds=creds)
-            yield syncer
-
-    @property
-    def syncing(self):
-        lock = self.syncing_lock[self._path]
-        acquired_lock = lock.acquire(False)
-        if acquired_lock is False:
-            return True
-        lock.release()
-        return False
+        # XXX could mark the critical section here...
+        d = syncer.sync(defer_decryption=defer_decryption)
+        d.addCallback(_record_received_docs)
+        return d
 
     def _get_syncer(self, url, creds=None):
         """
@@ -624,7 +551,6 @@ class SQLCipherU1DBSync(SQLCipherDatabase):
         This should only be called by the shutdown trigger.
         """
         self.shutdownID = None
-        self._sync_threadpool.stop()
         self.running = False
 
     def close(self):
