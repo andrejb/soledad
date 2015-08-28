@@ -1408,10 +1408,6 @@ class CouchDatabaseExceptionsTests(CouchDBTestCase):
         self.assertRaises(
             errors.MissingDesignDocError,
             self.db.whats_changed)
-        # _do_set_replica_gen_and_trans_id()
-        self.assertRaises(
-            errors.MissingDesignDocError,
-            self.db._do_set_replica_gen_and_trans_id, 1, 2, 3)
 
     def test_missing_design_doc_functions_raises(self):
         """
@@ -1550,7 +1546,3 @@ class CouchDatabaseExceptionsTests(CouchDBTestCase):
         self.assertRaises(
             errors.MissingDesignDocDeletedError,
             self.db.whats_changed)
-        # _do_set_replica_gen_and_trans_id()
-        self.assertRaises(
-            errors.MissingDesignDocDeletedError,
-            self.db._do_set_replica_gen_and_trans_id, 1, 2, 3)
