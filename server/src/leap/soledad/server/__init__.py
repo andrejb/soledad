@@ -100,6 +100,8 @@ from OpenSSL import tsafe
 
 from twisted import version
 
+from beaker.middleware import SessionMiddleware
+
 from leap.soledad.server.auth import SoledadTokenAuthMiddleware
 from leap.soledad.server.gzip_middleware import GzipMiddleware
 from leap.soledad.server.lock_resource import LockResource
@@ -304,9 +306,18 @@ def load_configuration(file_path):
 def application(environ, start_response):
     conf = load_configuration('/etc/leap/soledad-server.conf')
     state = CouchServerState(conf['couch_url'])
+    session_opts = {
+        'session.type': 'file',
+        'session.cookie_expires': False,  # TODO: expire?
+        'session.auto': True,
+        'session.secure': True,
+    }
     # WSGI application that may be used by `twistd -web`
     application = GzipMiddleware(
-        SoledadTokenAuthMiddleware(SoledadApp(state)))
+        SoledadTokenAuthMiddleware(
+            SessionMiddleware(
+                SoledadApp(state),
+                session_opts)))
 
     return application(environ, start_response)
 
