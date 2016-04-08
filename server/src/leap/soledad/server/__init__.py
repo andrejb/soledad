@@ -80,8 +80,9 @@ documents on the shared database is handled by `leap.soledad.server.auth` module
 """
 
 import configparser
-import urlparse
+import os
 import sys
+import urlparse
 
 from u1db.remote import http_app, utils
 
@@ -327,6 +328,7 @@ def application(environ, start_response):
 def debug_local_application_do_not_use(environ, start_response):
     """in where we bypass token auth middleware for ease of mind while
     debugging in your local environment"""
+    os.environ['SOLEDAD_BYPASS_AUTH'] = '1'
     state = _get_couch_state()
     application = SoledadApp(state)
     return application(environ, start_response)
